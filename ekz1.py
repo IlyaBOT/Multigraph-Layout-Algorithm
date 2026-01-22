@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 from __future__ import annotations
 from typing import List, Tuple, Dict, Set
@@ -7,9 +6,14 @@ from typing import List, Tuple, Dict, Set
 SEP = "-" * 60
 BIG = "=" * 60
 
-# По условию 3<=|xi|<=5
+# Ограничение по размеру куска: 3<=|xi|<=5
 SIZE_MIN = 3
 SIZE_MAX = 5
+
+# Как читать матрицу:
+# - "row": как есть, ровно по строкам (Шаг 1: сумма связей в строке).
+# - "undirected_max": если матрица несимметричная, берём max(A[i][j], A[j][i]).
+EDGE_MODE = "row"
 
 
 def parse_row(line: str, n: int) -> List[int]:
@@ -82,13 +86,14 @@ def read_input() -> Tuple[List[List[int]], int]:
     return mat, m
 
 
-def w(mat: List[List[int]], a: int, b: int) -> int:
-    """Кратность ребра между a и b. Если заполнен только один треугольник — берём максимум."""
+def edge(mat: List[List[int]], a: int, b: int) -> int:
     if a == b:
         return 0
-    va = mat[a][b]
-    vb = mat[b][a]
-    return va if va >= vb else vb
+    if EDGE_MODE == "undirected_max":
+        va = mat[a][b]
+        vb = mat[b][a]
+        return va if va >= vb else vb
+    return mat[a][b]
 
 
 def degrees(mat: List[List[int]], verts: List[int]) -> Tuple[Dict[int, int], Dict[int, int]]:
@@ -100,7 +105,7 @@ def degrees(mat: List[List[int]], verts: List[int]) -> Tuple[Dict[int, int], Dic
         for u in verts:
             if u == v:
                 continue
-            ww = w(mat, v, u)
+            ww = edge(mat, v, u)
             if ww:
                 s += ww
                 c += 1
@@ -116,9 +121,23 @@ def neighbors_of_piece(mat: List[List[int]], piece: List[int], remaining: Set[in
         for v in remaining:
             if v in piece_set:
                 continue
-            if w(mat, u, v) > 0:
+            if edge(mat, u, v) > 0:
                 cand.add(v)
     return sorted(cand)
+
+
+def compute_d_for_candidates(
+    mat: List[List[int]],
+    piece: List[int],
+    gamma: List[int],
+    deg: Dict[int, int],
+) -> List[Tuple[int, int, List[int]]]:
+    out: List[Tuple[int, int, List[int]]] = []
+    for v in gamma:
+        ps = [edge(mat, u, v) for u in piece]
+        dv = deg[v] - 2 * sum(ps)
+        out.append((v, dv, ps))
+    return out
 
 
 def fmt_x(v: int) -> str:
@@ -141,20 +160,6 @@ def print_gamma_line(step: int, part: int, gamma: List[int]) -> None:
     print(f"Гx{step} {part} = ({inside})")
 
 
-def compute_d_for_candidates(
-    mat: List[List[int]],
-    piece: List[int],
-    gamma: List[int],
-    deg: Dict[int, int],
-) -> List[Tuple[int, int, List[int]]]:
-    out: List[Tuple[int, int, List[int]]] = []
-    for v in gamma:
-        ps = [w(mat, u, v) for u in piece]
-        dv = deg[v] - 2 * sum(ps)
-        out.append((v, dv, ps))
-    return out
-
-
 def print_table(cand_info: List[Tuple[int, int, List[int]]], deg: Dict[int, int]) -> None:
     print("\nТаблица приращений:")
     print("  xj  | " + " | ".join(f"{v+1}" for v, _, _ in cand_info))
@@ -173,6 +178,25 @@ def print_table(cand_info: List[Tuple[int, int, List[int]]], deg: Dict[int, int]
 def print_degrees_block(mat: List[List[int]]) -> None:
     verts = list(range(len(mat)))
     deg, nbr = degrees(mat, verts)
+
+    # Проверка симметричности (по "сырой" матрице)
+    diffs = []
+    n = len(mat)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if mat[i][j] != mat[j][i]:
+                diffs.append((i, j, mat[i][j], mat[j][i]))
+
+    if diffs:
+        print("\n" + SEP)
+        print("Внимание: матрица НЕ симметричная (A[i][j] != A[j][i]) в некоторых местах.")
+        print(f"Сейчас степени считаются в режиме EDGE_MODE='{EDGE_MODE}'.")
+        print("Если граф неориентированный и ты хочешь 'зеркалить' значения, поставь EDGE_MODE='undirected_max'.")
+        for k, (i, j, aij, aji) in enumerate(diffs[:10], 1):
+            print(f"{k}) A[{i+1}][{j+1}]={aij}  !=  A[{j+1}][{i+1}]={aji}")
+        if len(diffs) > 10:
+            print(f"... и ещё {len(diffs) - 10} отличий")
+        print(SEP + "\n")
 
     print("\n" + BIG)
     print("Степени вершин (сумма связей по строкам):")
@@ -196,13 +220,16 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
         verts = sorted(remaining)
         deg, nbr = degrees(mat, verts)
 
+        # Старт: min степень, затем min число соседей, затем min номер
         start = min(verts, key=lambda v: (deg[v], nbr[v], v))
+
         piece: List[int] = [start]
-        S = deg[start]
+        S = deg[start]  # Σδ(xg)
 
         print(BIG)
         print(f"Кусок {part_id}")
         print(SEP)
+
         step = 1
         print_piece_line(step=step, part=part_id, piece=piece)
 
@@ -211,9 +238,8 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
         print(f"Σδ(xg) = {S} (m={m})")
         print(SEP)
 
-        # Если старт уже > m — этот кусок будет одиночным
         if S > m:
-            print(f"\nОстанов: Σδ(xg)={S} > m={m} уже на старте.\n")
+            print(f"Останов: Σδ(xg)={S} > m={m} уже на старте.\n")
             parts.append(piece)
             remaining.remove(start)
             print(f"Кусок {part_id} готов: ({fmt_x(start)})")
@@ -221,8 +247,8 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
             part_id += 1
             continue
 
+        # Основной цикл добора куска
         while True:
-            # размер куска
             if len(piece) >= SIZE_MAX:
                 print(f"\nОстанов: |x|={len(piece)} (достигли максимум {SIZE_MAX})")
                 break
@@ -236,13 +262,11 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
             cand_info = compute_d_for_candidates(mat, piece, gamma, deg)
             print_table(cand_info, deg)
 
-            # 1) обычные (не превышают m)
-            feasible_idx = [i for i, (_, dv, _) in enumerate(cand_info) if S + dv <= m]
+            feasible = [i for i, (_, dv, _) in enumerate(cand_info) if S + dv <= m]
 
-            if feasible_idx:
-                best_idx = min(feasible_idx, key=lambda i: (cand_info[i][1], i))
-                v_best, d_best, _ = cand_info[best_idx]
-
+            if feasible:
+                best = min(feasible, key=lambda i: (cand_info[i][1], i))
+                v_best, d_best, _ = cand_info[best]
                 print(f"min d(xj) = {d_best} -> берём {fmt_x(v_best)}")
 
                 piece.append(v_best)
@@ -257,18 +281,16 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
                 print(SEP)
                 continue
 
-            # 2) нет хода, который укладывается в m -> пробуем 1 тестовый прыжок
+            # --- НЕТ допустимых ходов, но делаем 1 тестовый прыжок + восстановление ---
             if len(piece) > SIZE_MAX - 2:
-                print(f"Останов: нет места для тестового шага и восстановления (|x|={len(piece)}, max={SIZE_MAX})")
+                print(f"Останов: нет места для тестового шага + восстановления (|x|={len(piece)}, max={SIZE_MAX})")
                 break
 
-            # берём "наименее больной" перелёт: минимизируем (S+dv), затем dv, затем порядок
-            probe_idx = min(range(len(cand_info)), key=lambda i: (S + cand_info[i][1], cand_info[i][1], i))
-            v_probe, d_probe, _ = cand_info[probe_idx]
+            probe = min(range(len(cand_info)), key=lambda i: (cand_info[i][1], i))
+            v_probe, d_probe, _ = cand_info[probe]
             S_before = S
-            piece_before_len = len(piece)
 
-            print(f"Нет кандидатов с Σδ(xg)+d <= m. ТЕСТОВЫЙ ШАГ: берём {fmt_x(v_probe)} "
+            print(f"Нет хода, который укладывается в m. ТЕСТОВЫЙ ШАГ: берём {fmt_x(v_probe)} "
                   f"(Σδ станет {S + d_probe} > m)")
 
             piece.append(v_probe)
@@ -283,8 +305,7 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
             print(SEP)
 
             if not gamma_p:
-                # откат
-                print("Тестовый шаг не дал кандидатов для восстановления -> ОТКАТ и конец куска.")
+                print("Тестовый шаг не дал кандидатов -> ОТКАТ и конец куска.")
                 piece.pop()
                 S = S_before
                 step -= 1
@@ -293,25 +314,17 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
             cand_info_p = compute_d_for_candidates(mat, piece, gamma_p, deg)
             print_table(cand_info_p, deg)
 
-            # восстановление: нужен отрицательный d и чтобы за 1 шаг вернуться в m
-            recover_idx = [
-                i for i, (_, dv, _) in enumerate(cand_info_p)
-                if dv < 0 and S + dv <= m
-            ]
-
-            if not recover_idx:
-                print("Восстановление не вышло (нет d<0, которое вернёт Σδ<=m за 1 шаг) -> ОТКАТ и конец куска.")
+            rec = [i for i, (_, dv, _) in enumerate(cand_info_p) if dv < 0 and S + dv <= m]
+            if not rec:
+                print("Восстановление не вышло (нет d<0, которое вернёт Σδ<=m) -> ОТКАТ и конец куска.")
                 piece.pop()
                 S = S_before
                 step -= 1
-                if piece_before_len < SIZE_MIN:
-                    print(f"Предупреждение: |x|={len(piece)} < {SIZE_MIN}, но по m больше не собрать.")
                 break
 
-            best_rec = min(recover_idx, key=lambda i: (cand_info_p[i][1], i))
+            best_rec = min(rec, key=lambda i: (cand_info_p[i][1], i))
             v_rec, d_rec, _ = cand_info_p[best_rec]
-
-            print(f"ВОССТАНОВЛЕНИЕ: min d(xj) = {d_rec} -> берём {fmt_x(v_rec)} (вернёмся в m)")
+            print(f"ВОССТАНОВЛЕНИЕ: min d(xj) = {d_rec} -> берём {fmt_x(v_rec)}")
 
             piece.append(v_rec)
             S += d_rec
@@ -323,7 +336,9 @@ def sequential_partition(mat: List[List[int]], m: int) -> List[List[int]]:
             print_gamma_line(step=step, part=part_id, gamma=gamma3)
             print(f"Σδ(xg) = {S} (m={m})")
             print(SEP)
-            # дальше продолжаем обычным образом
+
+        if len(piece) < SIZE_MIN:
+            print(f"Предупреждение: |x|={len(piece)} < {SIZE_MIN}, но больше не собирается.\n")
 
         parts.append(piece)
         for v in piece:
